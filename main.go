@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 type Stats struct {
@@ -75,14 +76,18 @@ func analyzeURL(url string) Stats {
 		return stats
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+
+	doc, err := html.Parse(resp.Body)
 	if err != nil {
-		return Stats{URL: url, Error: err}
+		stats.Error = err
+		return stats
 	}
-	bodyStr := string(body)
-	stats.WordCount = countWords(bodyStr)
-	stats.ImageCount = countImages(bodyStr)
-	stats.LinkCount = countLinks(bodyStr)
+	var textBuilder strings.Builder
+	stats.LinkCount = 0
+	extractText(doc, &textBuilder, &stats.LinkCount, &stats.ImageCount)
+
+	text := textBuilder.String()
+	stats.WordCount = countWords(text)
 
 	return stats
 }
@@ -95,14 +100,34 @@ func getUrl(url string) string {
 	return url
 }
 
-func countWords(body string) int {
-	return len(strings.Fields(string(body)))
+func countWords(text string) int {
+	text = strings.Join(strings.Fields(text), " ")
+	return len(strings.Fields(text))
 }
 
 func countImages(body string) int {
 	return strings.Count(string(body), "<img")
 }
 
-func countLinks(body string) int {
-	return strings.Count(string(body), "<a")
+func extractText(n *html.Node, textBuilder *strings.Builder, linkCount *int, imageCount *int) {
+	if n.Type == html.TextNode {
+		// Only add the text if it's not within a script, style, or other non-content tags
+		textBuilder.WriteString(n.Data + " ")
+	} else if n.Type == html.ElementNode && n.Data == "a" {
+		// Count links
+		(*linkCount)++
+	} else if n.Type == html.ElementNode && n.Data == "img" {
+		// Count images
+		(*imageCount)++
+	}
+
+	// Skip script and style tags content
+	if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style") {
+		return
+	}
+
+	// Process child nodes
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		extractText(c, textBuilder, linkCount, imageCount)
+	}
 }
